@@ -2,6 +2,14 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2026-07-14
+
+### Changed
+- No functional changes. Test release to verify the automated PyPI
+  publishing pipeline (GitHub Release → `.github/workflows/publish.yml` →
+  Trusted Publishing) end to end after configuring the trusted publisher
+  on PyPI.
+
 ## [0.2.1] - 2026-07-14
 
 ### Added
