@@ -279,27 +279,44 @@ _EBAY_ITEM_URL = "https://www.ebay.com/itm/{}"
 _STATUS_RE = re.compile(r"Status \(main\):\s*</td>\s*<td>([^<]*)</td>", re.IGNORECASE)
 _EDITITEMID_RE = re.compile(r'name="edititemid"[^>]*value="(\d+)"')
 
+# Gixen prints "Current bid: X.XX USD" right next to "Max bid: ..." for every
+# snipe, active or ended. For an ended one (won or lost) this is the
+# auction's actual final price -- useful since eBay itself no longer serves
+# that listing once it's gone from search results, so this is the only
+# place left to read what it finally sold for.
+_CURRENT_BID_RE = re.compile(r"Current bid:\s*([\d.]+\s*\w+)</td>", re.IGNORECASE)
 
-def _snipe_statuses(html: str) -> dict[str, str]:
+
+def _pair_by_proximity(html: str, marker_re: re.Pattern[str]) -> dict[str, str]:
     """
-    Pairs each item with the status text that precedes it in the HTML (the
-    order on the page is always Status (main) → Status (mirror) → that
-    snipe's form). With no JS or intermediate table explicitly linking
-    them, order/proximity is the only signal available.
+    Pairs each item with the nearest preceding match of `marker_re` in the
+    HTML (the order on the page is always these per-item markers → that
+    snipe's form). With no JS or intermediate table explicitly linking them,
+    page order/proximity is the only signal available.
     """
-    statuses = [(m.start(), m.group(1).strip()) for m in _STATUS_RE.finditer(html)]
+    marks = [(m.start(), m.group(1).strip()) for m in marker_re.finditer(html)]
     result: dict[str, str] = {}
-    si = 0
+    mi = 0
     current: str | None = None
     for m in _EDITITEMID_RE.finditer(html):
         pos = m.start()
-        while si < len(statuses) and statuses[si][0] < pos:
-            current = statuses[si][1]
-            si += 1
+        while mi < len(marks) and marks[mi][0] < pos:
+            current = marks[mi][1]
+            mi += 1
         item = m.group(1)
         if current is not None and item not in result:
             result[item] = current
     return result
+
+
+def _snipe_statuses(html: str) -> dict[str, str]:
+    """Pairs each item with its "Status (main): ..." text (see `_pair_by_proximity`)."""
+    return _pair_by_proximity(html, _STATUS_RE)
+
+
+def _snipe_current_bids(html: str) -> dict[str, str]:
+    """Pairs each item with its "Current bid: ..." text (see `_pair_by_proximity`)."""
+    return _pair_by_proximity(html, _CURRENT_BID_RE)
 
 
 def _normalize_status(raw: str | None) -> str:
@@ -332,6 +349,7 @@ def _parse_snipes(html: str) -> list[Snipe]:
         thumbs.setdefault(iid, thumb)
 
     statuses = _snipe_statuses(html)
+    current_bids = _snipe_current_bids(html)
 
     snipes: list[Snipe] = []
     seen: set[str] = set()
@@ -348,6 +366,7 @@ def _parse_snipes(html: str) -> list[Snipe]:
                 ebay_url=_EBAY_ITEM_URL.format(item),
                 thumb=thumbs.get(item, ""),
                 status=_normalize_status(statuses.get(item)),
+                current_bid=current_bids.get(item, ""),
             ))
     return snipes
 
@@ -377,6 +396,7 @@ class Snipe:
     ebay_url: str = ""
     thumb: str = ""       # Gixen thumbnail (fallback if not in the report)
     status: str = "unknown"  # "active" | "won" | "lost" | "ended" | "unknown"
+    current_bid: str = ""  # e.g. "62.00 USD" -- the auction's final price once ended
 
 
 # --------------------------------------------------------------------------- #

@@ -2,6 +2,16 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-07-17
+
+### Added
+- `Snipe.current_bid`: the auction's actual final price for an ended snipe
+  (won or lost), e.g. `"62.00 USD"`. Gixen prints "Current bid: ..." right
+  next to "Max bid: ..." for every row, active or ended -- for an ended one
+  this is the only place left to read what it finally sold for, since eBay
+  itself no longer serves that listing once it's out of search results.
+  Empty string if Gixen doesn't show it for that row.
+
 ## [0.3.1] - 2026-07-17
 
 ### Changed

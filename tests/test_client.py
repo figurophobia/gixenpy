@@ -17,6 +17,7 @@ from gixenpy.client import (
     _find_snipe_form,
     _normalize_status,
     _parse_snipes,
+    _snipe_current_bids,
     _snipe_row_present,
     _snipe_statuses,
     _trusted_action_url,
@@ -713,6 +714,7 @@ def test_update_snipe_group_only(monkeypatch):
 # --------------------------------------------------------------------------- #
 STATUS_HOME = """
 <a href="?logout">Log Out</a>
+<tr class=d3><td>Max bid: 30.00 USD</td><td>Current bid: 28.50 USD</td></tr>
 <tr class=d3><td>Status (main): </td><td>BID UNDER ASKING PRICE</td></tr>
 <tr class=d3><td>Status (mirror): </td><td>N/A</td></tr>
 <form action="home_2.php?sessionid=1#modifyme" method="post">
@@ -720,6 +722,7 @@ STATUS_HOME = """
   <input name="editmaxbid" value="30.00">
   <input name="username" value="u">
 </form>
+<tr class=d3><td>Max bid: 45.00 USD</td><td>Current bid: 40.00 USD</td></tr>
 <tr class=d3><td>Status (main): </td><td>SCHEDULED</td></tr>
 <tr class=d3><td>Status (mirror): </td><td>SCHEDULED</td></tr>
 <form action="home_2.php?sessionid=1#modifyme" method="post">
@@ -758,6 +761,27 @@ def test_normalize_status(raw, expected):
 def test_parse_snipes_includes_status():
     snipes = {s.item_id: s.status for s in _parse_snipes(STATUS_HOME)}
     assert snipes == {"111111111111": "lost", "222222222222": "active"}
+
+
+def test_snipe_current_bids_pairs_by_order():
+    bids = _snipe_current_bids(STATUS_HOME)
+    assert bids == {
+        "111111111111": "28.50 USD",
+        "222222222222": "40.00 USD",
+    }
+
+
+def test_parse_snipes_includes_current_bid():
+    # For an ended snipe (won or lost) this is the auction's actual final
+    # price -- eBay no longer serves that listing once it's out of search
+    # results, so Gixen's own page is the only place left to read it.
+    snipes = {s.item_id: s.current_bid for s in _parse_snipes(STATUS_HOME)}
+    assert snipes == {"111111111111": "28.50 USD", "222222222222": "40.00 USD"}
+
+
+def test_parse_snipes_current_bid_empty_if_missing():
+    snipes = _parse_snipes(SNIPE_LIST_HOME)
+    assert all(s.current_bid == "" for s in snipes)
 
 
 def test_parse_snipes_status_unknown_if_missing():
