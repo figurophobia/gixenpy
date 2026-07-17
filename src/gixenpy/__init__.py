@@ -17,4 +17,4 @@ __all__ = [
     "legacy_item_number",
 ]
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"

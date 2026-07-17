@@ -736,8 +736,13 @@ def test_snipe_statuses_pairs_by_order():
 @pytest.mark.parametrize("raw,expected", [
     ("SCHEDULED", "active"),
     ("scheduled", "active"),
-    ("BID UNDER ASKING PRICE", "ended"),
-    ("WON", "ended"),
+    ("WON", "won"),
+    ("won", "won"),
+    ("BID UNDER ASKING PRICE", "lost"),
+    ("LOST", "lost"),
+    ("FAILED", "lost"),
+    ("OUTBID", "lost"),
+    ("SOME NEW STATUS GIXEN INVENTS", "ended"),
     (None, "unknown"),
     ("", "unknown"),
 ])
@@ -747,7 +752,7 @@ def test_normalize_status(raw, expected):
 
 def test_parse_snipes_includes_status():
     snipes = {s.item_id: s.status for s in _parse_snipes(STATUS_HOME)}
-    assert snipes == {"111111111111": "ended", "222222222222": "active"}
+    assert snipes == {"111111111111": "lost", "222222222222": "active"}
 
 
 def test_parse_snipes_status_unknown_if_missing():

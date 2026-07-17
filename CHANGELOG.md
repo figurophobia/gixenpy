@@ -2,6 +2,25 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-07-17
+
+### Changed
+- `Snipe.status` now distinguishes **won** and **lost** snipes instead of
+  collapsing every non-`"SCHEDULED"` status into a single `"ended"` bucket.
+  Gixen's own "Status (main): ..." text already carries this: a literal
+  `"WON"` maps to `"won"`; `"LOST"`, `"FAILED"`, `"OUTBID"` and the
+  confirmed-live `"BID UNDER ASKING PRICE"` all map to `"lost"` (substring
+  match, case-insensitive). Any other non-empty, unrecognized terminal text
+  still maps to `"ended"` rather than being guessed into won/lost.
+  **This changes the set of values `Snipe.status` can take** — code doing
+  `status == "ended"` to mean "not active anymore" should switch to
+  `status != "active"`.
+- `purge_completed()` now checks `status != "active"` (not just
+  `== "ended"`) when confirming the purge succeeded, so it correctly
+  recognizes `"won"`/`"lost"` snipes as already-terminal too.
+- CLI `list` command: splits output into Active / Won / Lost / Ended
+  (Ended only shown if non-empty) instead of just Active / Ended.
+
 ## [0.2.2] - 2026-07-14
 
 ### Changed

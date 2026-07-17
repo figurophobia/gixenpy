@@ -75,7 +75,7 @@ What you can do with it:
 - Bid, offset (seconds before the close) and bid group, all configurable; in
   `update_snipe` each one is independent and optional (whatever isn't passed
   is kept as-is).
-- Tell active snipes apart from ended ones (`Snipe.status`).
+- Tell active, won and lost snipes apart (`Snipe.status`), not just active-vs-ended.
 - Dynamically locate Gixen's forms by parsing the HTML, instead of assuming
   fixed field names: if Gixen changes their site, it keeps working as long
   as the form structure doesn't change too much.
@@ -141,7 +141,7 @@ result = client.add_snipe(item_id="123456789012", max_bid=42.50, dry_run=False)
 
 # Manage existing snipes.
 for snipe in client.list_snipes():
-    print(snipe.item_id, snipe.max_bid, snipe.status)  # "active" | "ended" | "unknown"
+    print(snipe.item_id, snipe.max_bid, snipe.status)  # "active" | "won" | "lost" | "ended" | "unknown"
 
 client.update_snipe(item_id="123456789012", new_max=55)
 client.delete_snipe(item_id="123456789012")

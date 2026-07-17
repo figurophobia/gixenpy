@@ -270,12 +270,13 @@ def _find_dbidid_form(forms: list[_Form], item_number: str) -> _Form | None:
 _EBAY_ITEM_URL = "https://www.ebay.com/itm/{}"
 
 # Gixen shows "Status (main): <STATUS>" right before each snipe's row form.
-# Only two families of values have been observed against a real account:
-# "SCHEDULED" (a snipe pending firing) and terminal post-auction states
-# ("BID UNDER ASKING PRICE", and by analogy with similar projects:
-# "WON"/"LOST"/"OUTBID"...). Instead of listing every possible terminal
-# value (fragile if Gixen adds a new one), we treat "SCHEDULED" as the only
-# "active" status and any other non-empty text as "ended".
+# "SCHEDULED" is the only "active" (pending) status. Terminal states are
+# distinguished so a caller can tell a win from a loss: "WON" is a clean win;
+# "BID UNDER ASKING PRICE" (confirmed against a real account), "LOST",
+# "FAILED" and "OUTBID" all mean the snipe did not win. Anything else
+# non-empty is an unrecognized terminal state ("ended") rather than being
+# forced into won/lost — fragile guessing is worse than an honest "ended"
+# if Gixen ever renders new wording.
 _STATUS_RE = re.compile(r"Status \(main\):\s*</td>\s*<td>([^<]*)</td>", re.IGNORECASE)
 _EDITITEMID_RE = re.compile(r'name="edititemid"[^>]*value="(\d+)"')
 
@@ -305,7 +306,14 @@ def _snipe_statuses(html: str) -> dict[str, str]:
 def _normalize_status(raw: str | None) -> str:
     if not raw:
         return "unknown"
-    return "active" if raw.strip().upper() == "SCHEDULED" else "ended"
+    upper = raw.strip().upper()
+    if upper == "SCHEDULED":
+        return "active"
+    if "WON" in upper:
+        return "won"
+    if "LOST" in upper or "FAILED" in upper or "UNDER" in upper or "OUTBID" in upper:
+        return "lost"
+    return "ended"
 
 
 def _parse_snipes(html: str) -> list[Snipe]:
@@ -369,7 +377,7 @@ class Snipe:
     comment: str = ""    # optional comment
     ebay_url: str = ""
     thumb: str = ""       # Gixen thumbnail (fallback if not in the report)
-    status: str = "unknown"  # "active" | "ended" | "unknown"
+    status: str = "unknown"  # "active" | "won" | "lost" | "ended" | "unknown"
 
 
 # --------------------------------------------------------------------------- #
@@ -747,7 +755,7 @@ class GixenClient:
             r = self._post(action, data=dict(purge_form.fields))
             if r.status_code != 200:
                 raise GixenError(f"Gixen responded with HTTP {r.status_code} while purging.")
-            remaining = [s for s in _parse_snipes(r.text) if s.status == "ended"]
+            remaining = [s for s in _parse_snipes(r.text) if s.status != "active"]
             if not remaining:
                 return SnipeResult(ok=True, action=action,
                                     message="Ended snipes purged from the list.")

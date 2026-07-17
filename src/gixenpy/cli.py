@@ -83,7 +83,7 @@ def _print_section(title: str, snipes: list[Snipe]) -> None:
 
 @main.command("list")
 def list_cmd() -> None:
-    """List the account's snipes, split into active and ended."""
+    """List the account's snipes, split into active/won/lost/ended."""
     client = _client_from_env()
     try:
         snipes = client.list_snipes()
@@ -91,10 +91,15 @@ def list_cmd() -> None:
         _fail(str(e))
         return
     active = [s for s in snipes if s.status == "active"]
+    won = [s for s in snipes if s.status == "won"]
+    lost = [s for s in snipes if s.status == "lost"]
     ended = [s for s in snipes if s.status == "ended"]
     unknown = [s for s in snipes if s.status == "unknown"]
     _print_section("Active", active)
-    _print_section("Ended", ended)
+    _print_section("Won", won)
+    _print_section("Lost", lost)
+    if ended:
+        _print_section("Ended", ended)
     if unknown:
         _print_section("Unknown status", unknown)
 
