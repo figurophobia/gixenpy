@@ -2,6 +2,25 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-07-17
+
+### Changed
+- Cold login is now 2 HTTP requests instead of 4 (measured against a real
+  account: ~9.3s → ~5.9s). Two round trips were pure waste:
+  - `login()` already fetched the panel HTML to confirm the login worked,
+    then threw it away; `_authed_home()` fetched the exact same URL again
+    right after. `login()` now returns that HTML so `_authed_home()` reuses
+    it instead of re-fetching.
+  - The GET to the index page before the login POST (`INDEX_URL`, now
+    removed) turned out to feed nothing into the login request — no CSRF
+    or session token was ever scraped from it. Verified live that Gixen
+    sets the session cookie straight off the login POST itself with no
+    prior GET needed.
+- `login()`'s return type changed from `None` to `str` (the logged-in
+  panel's HTML). Nothing in this package's own code relied on it returning
+  `None`; a caller that does `client.login()` and ignores the return value
+  is unaffected.
+
 ## [0.3.0] - 2026-07-17
 
 ### Changed

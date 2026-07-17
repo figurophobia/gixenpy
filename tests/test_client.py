@@ -592,20 +592,25 @@ def test_authed_home_relogins_if_home_html_empty(monkeypatch):
 
     def fake_home_html():
         calls["n"] += 1
-        return "" if calls["n"] == 1 else FAKE_HOME
+        return ""
 
     monkeypatch.setattr(c, "_home_html", fake_home_html)
     logins = {"n": 0}
 
     def fake_login():
+        # login() now returns the panel HTML it fetched to confirm the
+        # login worked, instead of _authed_home() fetching it again.
         logins["n"] += 1
         c._logged_in = True
+        return FAKE_HOME
 
     monkeypatch.setattr(c, "login", fake_login)
 
     assert c._authed_home() == FAKE_HOME
     assert logins["n"] == 1
-    assert calls["n"] == 2
+    # Solo la comprobación inicial de sesión caducada llama a _home_html();
+    # login() ya no se vuelve a consultar aparte, devuelve el HTML él mismo.
+    assert calls["n"] == 1
 
 
 def test_authed_home_fails_if_still_empty_after_relogin(monkeypatch):
