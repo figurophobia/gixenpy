@@ -72,6 +72,13 @@ What you can do with it:
 
 - Schedule (`add_snipe`), list (`list_snipes`), edit (`update_snipe`), delete
   (`delete_snipe`) and purge ended snipes (`purge_completed`).
+- Read and change your account's settings (`get_settings`/`update_settings`),
+  search the ended-snipes history (`get_history`), import snipes from a CSV
+  (`import_csv`) or from your eBay Watchlist (`import_watchlist`), refresh
+  current prices (`refresh_prices`) and log out (`logout`).
+- **Persistent session**: the login session (cookies) is stored to disk and
+  reused, so Gixen doesn't kick your browser out on every run and each action
+  skips the login round-trip.
 - Bid, offset (seconds before the close) and bid group, all configurable; in
   `update_snipe` each one is independent and optional (whatever isn't passed
   is kept as-is).
@@ -81,7 +88,7 @@ What you can do with it:
   as the form structure doesn't change too much.
 - **Dry-run** mode (the default for `add_snipe` unless told otherwise):
   sends nothing, just reports what it would send.
-- A full CLI: `gixenpy list/add/edit/remove/purge/group`.
+- A full CLI: `gixenpy list/add/edit/remove/purge/group/history/settings/logout/refresh`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -152,7 +159,20 @@ client.update_snipe(item_id="123456789012", offset=12)   # change only the offse
 client.update_snipe(item_id="123456789012", group=2)     # change only the group
 
 client.purge_completed()  # remove already-ended snipes from the history
+
+# Settings & history (Gixen's native pages, read/written directly):
+settings = client.get_settings()          # → Settings(country, ebay_site, default_offset, ...)
+client.update_settings(default_offset=5)  # change one or more preferences
+history = client.get_history(keyword="Sony")  # search ended snipes by title
+client.refresh_prices()                   # refresh current bids on active snipes
+client.logout()                           # logout server-side + clear stored session
 ```
+
+The session (cookies) is persisted by default to
+`~/.config/gixenpy/session.json` and reused: Gixen only allows one session
+per account, so `gixenpy` won't kick your browser out. Change the file with
+`session_path=` or the `GIXEN_SESSION_PATH` environment variable; pass
+`session_path=None` to disable persistence.
 
 Credentials are your **Gixen** account's (not eBay's). Never logged or
 printed.
@@ -181,6 +201,12 @@ gixenpy remove 123456789012    # delete the snipe
 gixenpy purge                  # purge ended snipes from the history
 
 gixenpy group 3 123456789012 987654321098  # assign group 3 to several items
+
+gixenpy history                # recent ended snipes
+gixenpy history Sony           # search ended snipes by title keyword
+gixenpy settings               # show current account settings
+gixenpy refresh                # refresh current prices on active snipes
+gixenpy logout                 # log out and clear the stored session
 ```
 
 Every command exits with code `0` if Gixen confirmed the operation, or `1`
@@ -253,8 +279,11 @@ twine upload dist/*             # requires your own PyPI API token
 ## Roadmap
 
 - [x] Publish `gixenpy` on PyPI
-- [ ] Persistent session across processes (today every new `GixenClient`
-      logs in if needed; there's no on-disk session cache)
+- [x] Persistent session across processes (sessions persisted to
+      `~/.config/gixenpy/session.json` and reused automatically)
+- [x] Account settings (`get_settings`/`update_settings`), ended-snipes
+      history (`get_history`), CSV/Watchlist import, `refresh_prices`,
+      `logout`
 - [ ] Revisit the active/ended status heuristic if Gixen changes the
       text/order of "Status (main): ..." in their HTML
 

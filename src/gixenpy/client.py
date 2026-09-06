@@ -24,10 +24,13 @@ Principles:
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import requests
@@ -39,6 +42,17 @@ LOGIN_URL = BASE + "home_1.php"   # login form's action
 # The logged-in panel (snipe list + add-snipe form) lives at home_2.php.
 # home_1.php is just a bridge page that redirects there after login.
 HOME_URL = BASE + "home_2.php"
+SETTINGS_URL = BASE + "settings.php"   # account preferences (country, offsets…)
+HISTORY_URL = BASE + "history.php"     # ended snipes history (searchable)
+UPLOAD_URL = BASE + "upload.php"       # CSV import (multipart, field `file`)
+
+# Where the session is persisted. Gixen lets only ONE session per account, so
+# reusing a stored cookie instead of logging in again avoids kicking your
+# browser out. Enabled by default; override with session_path= or the
+# GIXEN_SESSION_PATH env variable (the stored file never contains the
+# password, only the session cookie Gixen handed us).
+DEFAULT_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "gixenpy"
+DEFAULT_SESSION_FILE = DEFAULT_CONFIG_DIR / "session.json"
 
 # Heuristics for recognizing the snipe form's fields.
 #   - add:  newitemid / newmaxbid / newsnipegroup / newbidoffset / username
@@ -372,6 +386,117 @@ def _parse_snipes(html: str) -> list[Snipe]:
 
 
 # --------------------------------------------------------------------------- #
+# Settings & history parsers (the "pure API" equivalents of the web panel)
+# --------------------------------------------------------------------------- #
+# Gixen's settings page has ~15 small named forms, each controlling one
+# preference (country, bid offset, etc.). We parse them into a Settings
+# dataclass; _parse_history handles the "ended snipes" search history.
+
+_SETTINGS_FORM_MAP: dict[str, tuple[str, ...]] = {
+    "country":                ("changecountry",         "newcountry"),
+    "ebay_site":              ("changeebaysite",        "newebaysite"),
+    "ebay_site_mirror":       ("changeebaysite",        "newebaysitemirror"),
+    "auto_target":            ("changeebaysite",        "newautotarget"),
+    "default_offset":         ("changebidoffset",      "newdefaultoffset"),
+    "default_offset_mirror":  ("changebidoffset",      "newdefaultoffsetmirror"),
+    "number_of_groups":       ("changenumberofgroups", "newnumberofgroups"),
+    "notifications":          ("changenotifications",   "newnotifications"),
+    "email":                  ("changenotifications",   "newemail"),
+    "show_images":            ("changeshowimages",      "newshowimages"),
+    "add_fields_position":    ("addfieldspositionform", "newaddfieldsposition"),
+    "contingency":            ("changecontingency",     "newcontingency"),
+    "multiwin":               ("changemultiwin",        "newmultiwin"),
+    "comments":               ("changecomments",        "newcomment"),
+    "weak_password_warning":  ("changeweakpasswarn",    "newweakpasswordwarning"),
+}
+# Which keyword to POST alongside the field value for each settings form.
+# _get_settings() fills these in from the form defaults.
+_SETTINGS_FORM_SUBMIT: dict[str, str] = {}
+
+
+def _parse_settings(html: str) -> Settings:
+    """
+    Parses the settings page (settings.php) into a Settings dataclass.
+
+    Each preference lives in its own tiny <form name="…">.  For selects we
+    take the currently-selected (or first) option's value; for inputs we
+    take value=.
+    """
+    s = Settings()
+    forms = _parse_forms(html)
+    by_name = {f.name: f for f in forms if f.name}
+
+    # Named forms: most have one or two <select>s / inputs.
+    for attr, (form_name, field_name) in _SETTINGS_FORM_MAP.items():
+        f = by_name.get(form_name)
+        if not f:
+            continue
+        val = f.fields.get(field_name, "")
+        setattr(s, attr, val)
+
+    # Multiwin groups (group1..group10)
+    multiwin_form = by_name.get("changemultiwin")
+    if multiwin_form:
+        g = {}
+        for i in range(1, 11):
+            key = f"group{i}"
+            if key in multiwin_form.fields:
+                g[key] = multiwin_form.fields[key]
+        s.group_size = g
+
+    return s
+
+
+def _parse_history(html: str) -> list[HistoryEntry]:
+    """
+    Parses the search history page (history.php).  Each row has cells
+    with classes r1..r9 (item, title, end time, bid, final price, group,
+    status, time added, time deleted).  We walk the HTML in order and
+    group cells into entries starting at each r1.
+    """
+    cells = re.findall(r'<td class="r(\d)">(.*?)</td>', html, re.S)
+    if not cells:
+        return []
+
+    entries: list[HistoryEntry] = []
+    buf: dict[str, str] = {}
+    for idx_str, raw_val in cells:
+        idx = int(idx_str)
+        if idx == 1 and buf:
+            entries.append(_history_entry_from(buf))
+            buf = {}
+        # Strip HTML tags from the cell value (title has seller link, etc.)
+        clean = re.sub(r"<[^>]+>", " ", raw_val)          # tags -> single spaces
+        clean = re.sub(r"\s+", " ", clean).strip()        # collapse whitespace
+        clean = re.sub(r"\s+(?=[),.;:!?])", "", clean)    # "foo )" -> "foo)"
+        buf[str(idx)] = clean
+    if buf:
+        entries.append(_history_entry_from(buf))
+    return entries
+
+
+def _history_entry_from(cells: dict[str, str]) -> HistoryEntry:
+    """Builds a HistoryEntry from the cleaned r1..r9 cell texts."""
+    # Item id lives in an <a> tag; the cleaned text is already just the id.
+    item_id = cells.get("1", "")
+    # Build a URL from the item id (numeric).
+    item_num = re.sub(r"[^0-9]", "", item_id)
+    ebay_url = _EBAY_ITEM_URL.format(item_num) if item_num.isdigit() else ""
+    return HistoryEntry(
+        item_id=item_id,
+        title=cells.get("2", ""),
+        end_time=cells.get("3", ""),
+        bid=cells.get("4", ""),
+        final_price=cells.get("5", ""),
+        group=cells.get("6", ""),
+        status=cells.get("7", ""),
+        time_added=cells.get("8", ""),
+        time_deleted=cells.get("9", ""),
+        ebay_url=ebay_url,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Result of an operation
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -399,6 +524,53 @@ class Snipe:
     current_bid: str = ""  # e.g. "62.00 USD" -- the auction's final price once ended
 
 
+@dataclass
+class Settings:
+    """The account's settings, read from settings.php (Gixen's native page)."""
+
+    country: str = ""              # newcountry (numeric code as Gixen uses it)
+    ebay_site: str = ""            # newebaysite
+    ebay_site_mirror: str = ""     # newebaysitemirror
+    auto_target: str = ""          # newautotarget
+    default_offset: str = ""       # newdefaultoffset (seconds before close)
+    default_offset_mirror: str = ""  # newdefaultoffsetmirror
+    number_of_groups: str = ""     # newnumberofgroups
+    notifications: str = ""        # newnotifications ("t"/"f")
+    email: str = ""                # newemail
+    show_images: str = ""          # newshowimages ("1"/"0")
+    add_fields_position: str = ""  # newaddfieldsposition ("1"/"0")
+    contingency: str = ""          # newcontingency ("true"/"false")
+    multiwin: str = ""             # newmultiwin ("true"/"false")
+    group_size: dict[str, str] = field(default_factory=dict)  # group1..group10
+    comments: str = ""             # newcomment ("true"/"false")
+    weak_password_warning: str = ""  # newweakpasswordwarning ("1"/"0")
+
+    def to_dict(self) -> dict[str, str]:
+        d: dict[str, str] = {}
+        for k, v in self.__dict__.items():
+            if k == "group_size":
+                d.update(v)
+            else:
+                d[k] = v
+        return d
+
+
+@dataclass
+class HistoryEntry:
+    """One ended snipe row from history.php."""
+
+    item_id: str
+    title: str = ""
+    end_time: str = ""       # End time (UTC)
+    bid: str = ""            # the max bid that was scheduled
+    final_price: str = ""    # what the auction actually ended at
+    group: str = ""
+    status: str = ""         # raw Gixen status text
+    time_added: str = ""
+    time_deleted: str = ""
+    ebay_url: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # Client
 # --------------------------------------------------------------------------- #
@@ -410,6 +582,7 @@ class GixenClient:
         dry_run: bool = True,
         timeout: float | tuple[float, float] = (5, 25),
         retry_backoff: float = 2.0,
+        session_path: str | Path | None = None,
     ):
         self.username = username
         self.password = password
@@ -421,9 +594,17 @@ class GixenClient:
         # Wait before retrying a write that Gixen accepted (HTTP 200) but
         # didn't apply -- a one-off silent glitch, not a rejection.
         self.retry_backoff = retry_backoff
+        # Where the login session (cookies) is stored/restored. Gixen only
+        # allows ONE session per account, so reusing it avoids kicking your
+        # browser out on every action.
+        self._session_path = (
+            Path(session_path) if session_path
+            else (Path(os.environ["GIXEN_SESSION_PATH"]) if os.environ.get("GIXEN_SESSION_PATH") else None)
+        )
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": "Mozilla/5.0 (gixenpy)"})
         self._logged_in = False
+        self._session_id_cache = ""   # sessionid read from the panel HTML
 
     @property
     def ready(self) -> bool:
@@ -458,6 +639,68 @@ class GixenClient:
             return True
         return _find_snipe_form(html) is not None
 
+    # ---- Session persistence -------------------------------------------------
+    # Gixen allows only ONE session per account, so instead of logging in
+    # fresh (which kicks any other session off) we reuse the stored session
+    # cookie. The file never contains the password, only the session cookie.
+    _SESSION_FILE_RE = re.compile(r"sessionid=(\d+)")
+
+    def _session_id(self, html: str = "") -> str:
+        """The numeric session id Gixen puts in form actions (`sessionid=…`)."""
+        if html:
+            m = self._SESSION_FILE_RE.search(html)
+            if m:
+                self._session_id_cache = m.group(1)
+        return self._session_id_cache
+
+    def _save_session(self) -> None:
+        """Persists the current session cookies to disk."""
+        if self._session_path is None:
+            return
+        try:
+            self._session_path.parent.mkdir(parents=True, exist_ok=True)
+            cookies = [
+                {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path}
+                for c in self._session.cookies
+                if "gixen.com" in (c.domain or "")
+            ]
+            self._session_path.write_text(json.dumps({
+                "username": self.username,
+                "sessionid": self._session_id_cache,
+                "cookies": cookies,
+            }, indent=2))
+        except OSError:
+            pass  # persistence is best-effort; never break the operation for it
+
+    def _restore_session(self) -> bool:
+        """
+        Loads a previously stored session (cookies) from disk, if present.
+        Returns True when there was a file to load from (its contents may
+        already be expired; that's detected later with `_looks_logged_in`).
+        """
+        if self._session_path is None:
+            return False
+        try:
+            if not self._session_path.exists():
+                return False
+            data = json.loads(self._session_path.read_text())
+        except (OSError, ValueError, json.JSONDecodeError):
+            return False
+        for c in data.get("cookies", []):
+            self._session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""), path=c.get("path", "/"))
+        if data.get("username"):
+            self.username = data["username"]
+        return bool(data.get("cookies"))
+
+    def _clear_session(self) -> None:
+        """Removes the stored session file and resets the in-memory session."""
+        self._session.cookies.clear()
+        self._logged_in = False
+        try:
+            self._session_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     def _authed_home(self) -> str:
         """
         Returns the logged-in panel's HTML, REUSING the session if it's
@@ -471,6 +714,14 @@ class GixenClient:
             if self._looks_logged_in(html):
                 return html
             self._logged_in = False  # session expired (e.g. you logged in via the browser)
+        if self._restore_session():
+            # A stored session exists: probe it before doing a fresh login
+            # (which would kick the browser out -- Gixen allows one session).
+            html = self._home_html()
+            if self._looks_logged_in(html):
+                self._logged_in = True
+                self._session_id(html)
+                return html
         # login() already fetches the panel HTML to confirm the login worked
         # (the "bridge page" home_2.php request); reuse it here instead of
         # fetching that same URL a second time right after (measured against
@@ -526,6 +777,8 @@ class GixenClient:
                 "(they're your Gixen account's, not eBay's)."
             )
         self._logged_in = True
+        self._session_id(home.text)         # cache sessionid from the panel's action URLs
+        self._save_session()                # reuse the same session next time
         return home.text
 
     def _home_html(self) -> str:
@@ -538,7 +791,9 @@ class GixenClient:
         the real panel.
         """
         r = self._get(HOME_URL)
-        return r.text if r.status_code == 200 else ""
+        html = r.text if r.status_code == 200 else ""
+        self._session_id(html)  # cache sessionid seen in the panel (may be "")
+        return html
 
     # ---- Schedule a snipe ----------------------------------------------------
     def add_snipe(
@@ -798,6 +1053,171 @@ class GixenClient:
             ok=False, action=action,
             message="Couldn't confirm that all ended snipes were purged; check the list.",
         )
+
+    # ---- Settings (the "pure API" way of reading/writing preferences) --------
+    def get_settings(self) -> Settings:
+        """
+        Reads the account's current settings from settings.php (the same
+        page the Settings button on home_2.php opens).  Returns a Settings
+        dataclass with all the preference values.
+        """
+        self._authed_home()  # ensures a live session so the action URL has a sessionid
+        sid = self._session_id()
+        url = SETTINGS_URL + f"?username={self.username}&sessionid={sid}"
+        r = self._get(url)
+        if r.status_code != 200:
+            raise GixenError(f"Gixen responded with HTTP {r.status_code} while reading settings.")
+        return _parse_settings(r.text)
+
+    def update_settings(self, **changes: str) -> SnipeResult:
+        """
+        Updates one or more account preferences.  The keyword argument names
+        match the Settings dataclass fields:
+
+            country, ebay_site, ebay_site_mirror, auto_target,
+            default_offset, default_offset_mirror, number_of_groups,
+            notifications, show_images, add_fields_position,
+            contingency, multiwin, comments, weak_password_warning,
+            group1..group10
+
+        All settings forms on Gixen POST to the same URL, so this sends
+        all changes in a single POST.
+        """
+        if not changes:
+            raise GixenError("Provide at least one setting to change.")
+        self._authed_home()  # ensures a live session so the action URL has a sessionid
+        sid = self._session_id()
+        base_url = SETTINGS_URL + f"?username={self.username}&sessionid={sid}"
+        payload: dict[str, str] = {}
+        for key, value in changes.items():
+            mapped = _SETTINGS_FORM_MAP.get(key)
+            if mapped is None:
+                if key.startswith("group") and key[5:].isdigit():
+                    mapped = ("changemultiwin", key)
+                else:
+                    raise GixenError(f"Unknown setting: {key!r}")
+            payload[mapped[1]] = str(value)
+
+        # Verify first change (the rest are submitted too but only the first
+        # is explicitly checked, to keep the round-trip count low).
+        first_key = list(changes.keys())[0]
+        for attempt in range(2):
+            r = self._post(base_url, data=payload)
+            if r.status_code != 200:
+                raise GixenError(f"Gixen responded with HTTP {r.status_code} while updating settings.")
+            new = _parse_settings(r.text)
+            if getattr(new, first_key, None) == changes[first_key]:
+                return SnipeResult(ok=True, action=base_url,
+                                   message=f"Setting '{first_key}' updated to {changes[first_key]}.",
+                                   payload=payload)
+            if attempt == 0:
+                time.sleep(self.retry_backoff)
+        return SnipeResult(ok=False, action=base_url, payload=payload,
+                           message="Couldn't confirm the settings change on Gixen.")
+
+    # ---- History (ended snipes) ----------------------------------------------
+    def get_history(self, keyword: str = "", startts: str = "") -> list[HistoryEntry]:
+        """
+        Searches the snipe history (history.php).  With no keyword, returns
+        the most recently ended snipes.  If `startts` is given, fetches
+        the page starting from that unix timestamp (for pagination, as the
+        "Older" button does).
+        """
+        home_html = self._authed_home()
+        forms = _parse_forms(home_html)
+        history_form = next((f for f in forms if f.name == "history"), None)
+        if history_form is None:
+            raise GixenError("Couldn't find the history form on Gixen.")
+        action = _trusted_action_url(HISTORY_URL, "history.php?username=" + self.username + "&sessionid=" + self._session_id())
+        payload = dict(history_form.fields)
+        payload["keyword"] = keyword
+        if startts:
+            payload["startts"] = startts
+        r = self._post(action, data=payload)
+        if r.status_code != 200:
+            raise GixenError(f"Gixen responded with HTTP {r.status_code} while reading history.")
+        return _parse_history(r.text)
+
+    # ---- CSV import (upload.php) ---------------------------------------------
+    def import_csv(self, csv_path: str | Path) -> SnipeResult:
+        """
+        Imports snipes from a CSV file (the same format Gixen expects from
+        the "Import CSV" button on settings.php).  The file is uploaded via
+        the multipart form on upload.php.
+        """
+        path = Path(csv_path)
+        if not path.is_file():
+            raise GixenError(f"CSV file not found: {path}")
+        self._authed_home()  # ensures a live session so the action URL has a sessionid
+        sid = self._session_id()
+        url = UPLOAD_URL + f"?username={self.username}&sessionid={sid}"
+        with open(path, "rb") as f:
+            files = {"file": (path.name, f, "text/csv")}
+            data = {"submit": "Upload"}
+            r = self._post(url, data=data, files=files)
+        if r.status_code != 200:
+            raise GixenError(f"Gixen responded with HTTP {r.status_code} while importing CSV.")
+        if _explicit_error_line(r.text):
+            return SnipeResult(ok=False, action=url, message=_explicit_error_line(r.text) or "")
+        return SnipeResult(ok=True, action=url, message="CSV import submitted.")
+
+    # ---- Watchlist / Gixen list import (panel buttons) ------------------------
+    def import_watchlist(self) -> SnipeResult:
+        """
+        Imports the user's eBay Watchlist into Gixen as snipes
+        (the "Import Watchlist" button on the home panel).
+        """
+        return self._panel_button("importwatchlist", "Watchlist import")
+
+    def import_gixenlist(self) -> SnipeResult:
+        """
+        Imports the user's eBay Gixen list (the "Import Gixen List" button
+        on the home panel).
+        """
+        return self._panel_button("importgixenlist", "Gixen list import")
+
+    def refresh_prices(self) -> SnipeResult:
+        """
+        Refreshes the current bids on all active snipes (the "Refresh Prices"
+        button on the home panel).
+        """
+        return self._panel_button("refreshprices", "Prices refreshed")
+
+    def _panel_button(self, field_name: str, label: str) -> SnipeResult:
+        """
+        Finds a single-field button form on the home panel by its hidden
+        field name and submits it (the same mechanism purge_completed uses).
+        """
+        forms = _parse_forms(self._authed_home())
+        form = next((f for f in forms if field_name in f.fields), None)
+        if form is None:
+            raise GixenError(f"Couldn't find the '{field_name}' button on Gixen.")
+        action = _trusted_action_url(BASE, form.action.split("#")[0])
+        r = self._post(action, data=dict(form.fields))
+        if r.status_code != 200:
+            raise GixenError(f"Gixen responded with HTTP {r.status_code} while {label}.")
+        if _explicit_error_line(r.text):
+            return SnipeResult(ok=False, action=action, message=_explicit_error_line(r.text) or "")
+        return SnipeResult(ok=True, action=action, message=f"{label}: done.")
+
+    # ---- Logout --------------------------------------------------------------
+    def logout(self) -> SnipeResult:
+        """
+        Logs out of Gixen (invalidates the server session and clears the
+        locally stored session file).
+        """
+        home_html = self._authed_home()
+        forms = _parse_forms(home_html)
+        logout_form = next((f for f in forms if "logout" in f.fields), None)
+        if logout_form is None:
+            raise GixenError("Couldn't find the logout form on Gixen.")
+        action = _trusted_action_url(BASE, logout_form.action.split("#")[0])
+        r = self._post(action, data=dict(logout_form.fields))
+        self._clear_session()
+        if r.status_code != 200:
+            return SnipeResult(ok=False, action=action,
+                               message=f"Gixen responded with HTTP {r.status_code} during logout.")
+        return SnipeResult(ok=True, action=action, message="Logged out successfully.")
 
     @staticmethod
     def _interpret_add_response(html: str, item_number: str, bid: str, action: str) -> SnipeResult:

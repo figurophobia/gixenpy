@@ -2,6 +2,8 @@
 from .client import (
     GixenClient,
     GixenError,
+    HistoryEntry,
+    Settings,
     Snipe,
     SnipeForm,
     SnipeResult,
@@ -11,10 +13,12 @@ from .client import (
 __all__ = [
     "GixenClient",
     "GixenError",
+    "HistoryEntry",
+    "Settings",
     "Snipe",
     "SnipeForm",
     "SnipeResult",
     "legacy_item_number",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"

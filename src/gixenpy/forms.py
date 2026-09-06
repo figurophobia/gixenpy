@@ -18,6 +18,9 @@ from html.parser import HTMLParser
 class _Form:
     action: str = ""
     method: str = "post"
+    # <form name="..."> (used to tell Gixen's settings forms apart: each of
+    # them has a distinct name like changecountry, changeebaysite, ...).
+    name: str = ""
     # field name -> default value (fields with no value get "")
     fields: dict[str, str] = field(default_factory=dict)
 
@@ -45,6 +48,7 @@ class _FormParser(HTMLParser):
             self._cur = _Form(
                 action=attrs.get("action", ""),
                 method=(attrs.get("method", "post") or "post").lower(),
+                name=attrs.get("name", ""),
             )
             self.forms.append(self._cur)
             self._select = None

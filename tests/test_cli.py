@@ -5,7 +5,7 @@ replaced with a fake client with whatever behavior each test needs.
 from click.testing import CliRunner
 
 from gixenpy.cli import main
-from gixenpy.client import GixenError, Snipe, SnipeResult
+from gixenpy.client import GixenError, HistoryEntry, Settings, Snipe, SnipeResult
 
 
 class FakeClient:
@@ -36,6 +36,18 @@ class FakeClient:
 
     def purge_completed(self):
         return self._call("purge_completed")
+
+    def get_history(self, keyword=""):
+        return self._call("get_history", keyword)
+
+    def get_settings(self):
+        return self._call("get_settings")
+
+    def logout(self):
+        return self._call("logout")
+
+    def refresh_prices(self):
+        return self._call("refresh_prices")
 
 
 def _patch_client(monkeypatch, **behaviors):
@@ -184,5 +196,53 @@ def test_version():
 def test_help_lists_commands():
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    for cmd in ["list", "add", "edit", "remove", "purge", "group"]:
+    for cmd in ["list", "add", "edit", "remove", "purge", "group", "history", "settings", "logout", "refresh"]:
         assert cmd in result.output
+
+
+def test_history_shows_entries(monkeypatch):
+    entries = [
+        HistoryEntry(item_id="227449473999", title="Nintendo DS", final_price="47.00 USD",
+                     status="BID UNDER ASKING PRICE", end_time="8/1/26 05:33:01 AM UTC"),
+    ]
+    _patch_client(monkeypatch, get_history=entries)
+    result = CliRunner().invoke(main, ["history"])
+    assert result.exit_code == 0
+    assert "227449473999" in result.output
+    assert "BID UNDER ASKING PRICE" in result.output
+
+
+def test_history_no_entries(monkeypatch):
+    _patch_client(monkeypatch, get_history=[])
+    result = CliRunner().invoke(main, ["history"])
+    assert result.exit_code == 0
+    assert "no history entries" in result.output
+
+
+def test_history_propagates_error(monkeypatch):
+    _patch_client(monkeypatch, get_history=GixenError("boom"))
+    result = CliRunner().invoke(main, ["history"])
+    assert result.exit_code == 1
+
+
+def test_settings_shows_values(monkeypatch):
+    s = Settings(country="8", default_offset="6", notifications="t")
+    _patch_client(monkeypatch, get_settings=s)
+    result = CliRunner().invoke(main, ["settings"])
+    assert result.exit_code == 0
+    assert "country: 8" in result.output
+    assert "default_offset: 6" in result.output
+
+
+def test_logout_ok(monkeypatch):
+    _patch_client(monkeypatch, logout=SnipeResult(ok=True, message="Logged out successfully."))
+    result = CliRunner().invoke(main, ["logout"])
+    assert result.exit_code == 0
+    assert "OK:" in result.output
+
+
+def test_refresh_ok(monkeypatch):
+    _patch_client(monkeypatch, refresh_prices=SnipeResult(ok=True, message="Prices refreshed: done."))
+    result = CliRunner().invoke(main, ["refresh"])
+    assert result.exit_code == 0
+    assert "OK:" in result.output

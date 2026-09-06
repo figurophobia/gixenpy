@@ -16,6 +16,8 @@ from gixenpy.client import (
     _bid_matches,
     _find_snipe_form,
     _normalize_status,
+    _parse_history,
+    _parse_settings,
     _parse_snipes,
     _snipe_current_bids,
     _snipe_row_present,
@@ -852,3 +854,228 @@ def test_purge_completed_button_not_found(monkeypatch):
     c = _client_logged(monkeypatch, home=FAKE_HOME)
     with pytest.raises(GixenError, match="purge"):
         c.purge_completed()
+
+
+# --------------------------------------------------------------------------- #
+# Settings page (settings.php): each preference is its own small named form.
+# --------------------------------------------------------------------------- #
+FAKE_SETTINGS = """
+<a href="?logout">Log Out</a>
+<form name="changecountry" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newcountry"><option value="8" selected>US</option><option value="0">Other</option></select>
+</form>
+<form name="changeebaysite" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newebaysite"><option value="8" selected>US</option></select>
+  <select name="newebaysitemirror"><option value="8" selected>US</option></select>
+  <select name="newautotarget"><option value="1" selected>Yes</option></select>
+</form>
+<form name="changebidoffset" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newdefaultoffset"><option value="5">5</option><option value="6" selected>6</option></select>
+  <select name="newdefaultoffsetmirror"><option value="6" selected>6</option></select>
+</form>
+<form name="changenumberofgroups" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newnumberofgroups"><option value="10" selected>10</option></select>
+</form>
+<form name="changenotifications" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newnotifications"><option value="t" selected>Yes</option></select>
+  <input name="newemail" value="me@example.com">
+</form>
+<form name="changecontingency" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newcontingency"><option value="true" selected>Yes</option></select>
+</form>
+<form name="changemultiwin" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newmultiwin"><option value="false" selected>No</option></select>
+  <select name="group1"><option value="2">2</option></select>
+  <select name="group2"><option value="3">3</option></select>
+</form>
+"""
+
+
+def test_parse_settings_reads_named_forms():
+    s = _parse_settings(FAKE_SETTINGS)
+    assert s.country == "8"
+    assert s.ebay_site == "8" and s.ebay_site_mirror == "8"
+    assert s.auto_target == "1"
+    assert s.default_offset == "6"   # the 'selected' option, not the first
+    assert s.default_offset_mirror == "6"
+    assert s.number_of_groups == "10"
+    assert s.notifications == "t"
+    assert s.email == "me@example.com"
+    assert s.contingency == "true"
+    assert s.multiwin == "false"
+    assert s.group_size == {"group1": "2", "group2": "3"}
+
+
+def test_parse_settings_respects_first_option_when_no_selected():
+    s = _parse_settings(FAKE_SETTINGS + """
+<form name="changeshowimages" method="post" action="settings.php?username=u&sessionid=1">
+  <select name="newshowimages"><option value="1">Yes</option><option value="0">No</option></select>
+</form>
+""")
+    assert s.show_images == "1"
+
+
+def test_parse_settings_empty_html():
+    s = _parse_settings("")
+    assert s.country == "" and s.group_size == {}
+
+
+def test_settings_to_dict_flattens_groups():
+    s = _parse_settings(FAKE_SETTINGS)
+    d = s.to_dict()
+    assert d["group1"] == "2" and d["country"] == "8"
+
+
+# --------------------------------------------------------------------------- #
+# History page (history.php): rows with classes r1..r9.
+# --------------------------------------------------------------------------- #
+FAKE_HISTORY = """
+<form name="searchhistory" method="post" action="history.php?username=u&sessionid=1">
+  <input name="keyword" value="">
+</form>
+<tr class=d1>
+  <tr class="test"><td>eBay Item</td></tr>
+  <tr><td class="r1"><a href="http://cgi.ebay.es/ws/eBayISAPI.dll?ViewItem&item=227449473999">227449473999</a></td></tr>
+  <tr class="test-2"><td>Title</td></tr>
+  <tr><td class="r2">Some Nintendo <i>(by <a href="x">seller</a>)</i></td></tr>
+  <tr class="test-2"><td>End time</td></tr>
+  <tr><td class="r3">8/1/26 05:33:01 AM UTC</td></tr>
+  <tr class="test-2"><td>Bid</td></tr>
+  <tr><td class="r4">43.00</td></tr>
+  <tr class="test-2"><td>Final price</td></tr>
+  <tr><td class="r5">47.00 USD</td></tr>
+  <tr class="test-2"><td>Snipe Group</td></tr>
+  <tr><td class="r6">0</td></tr>
+  <tr class="test-2"><td>Status</td></tr>
+  <tr><td class="r7">BID UNDER ASKING PRICE</td></tr>
+  <tr class="test-2"><td>Time Added</td></tr>
+  <tr><td class="r8">7/27/26 07:03:17 PM UTC</td></tr>
+  <tr class="test-2"><td>Time Deleted</td></tr>
+  <tr><td class="r9">8/1/26 09:14:53 PM UTC</td></tr>
+</tr>
+<tr class=d0>
+  <tr class="test"><td>eBay Item</td></tr>
+  <tr><td class="r1"><a href="http://cgi.ebay.es/ws/eBayISAPI.dll?ViewItem&item=227449373164">227449373164</a></td></tr>
+  <tr class="test-2"><td>Title</td></tr>
+  <tr><td class="r2">Another Item</td></tr>
+  <tr class="test-2"><td>Bid</td></tr>
+  <tr><td class="r4">45.00</td></tr>
+  <tr class="test-2"><td>Status</td></tr>
+  <tr><td class="r7">OUTBID</td></tr>
+</tr>
+"""
+
+
+def test_parse_history_rows():
+    entries = _parse_history(FAKE_HISTORY)
+    assert [e.item_id for e in entries] == ["227449473999", "227449373164"]
+    first = entries[0]
+    assert first.title == "Some Nintendo (by seller)"  # HTML stripped
+    assert first.bid == "43.00"
+    assert first.final_price == "47.00 USD"
+    assert first.status == "BID UNDER ASKING PRICE"
+    assert first.end_time == "8/1/26 05:33:01 AM UTC"
+    assert first.time_added == "7/27/26 07:03:17 PM UTC"
+    assert first.time_deleted == "8/1/26 09:14:53 PM UTC"
+    assert first.ebay_url.endswith("227449473999")
+    # The second row doesn't have all cells; gaps stay empty.
+    assert entries[1].final_price == ""
+
+
+def test_parse_history_empty():
+    assert _parse_history("<p>no history</p>") == []
+
+
+# --------------------------------------------------------------------------- #
+# Persistent session: save cookies / restore them / reuse without re-login.
+# --------------------------------------------------------------------------- #
+def _client_with_session(tmp_path, monkeypatch, home=FAKE_HOME):
+    c = GixenClient(username="u", password="p", retry_backoff=0,
+                    session_path=tmp_path / "session.json")
+    c._logged_in = True
+    monkeypatch.setattr(c, "_home_html", lambda: home)
+    return c
+
+
+def test_save_and_restore_session(tmp_path, monkeypatch):
+    c = GixenClient(username="u", password="p", retry_backoff=0,
+                    session_path=tmp_path / "session.json")
+    # Simulate a logged-in requests session with a Gixen cookie
+    c._session.cookies.set("PHPSESSID", "abc123", domain="www.gixen.com", path="/")
+    c._session_id_cache = "142975504960100936"
+    c._save_session()
+
+    data = (tmp_path / "session.json").read_text()
+    assert "PHPSESSID" in data
+    assert "abc123" in data
+    assert "142975504960100936" in data
+    assert "password" not in data  # never store the password
+
+    c2 = GixenClient(username="", password="", retry_backoff=0,
+                     session_path=tmp_path / "session.json")
+    assert c2._restore_session() is True
+    assert any(ck.name == "PHPSESSID" and ck.value == "abc123" for ck in c2._session.cookies)
+    assert c2.username == "u"
+
+
+def test_restore_session_no_file(tmp_path):
+    c = GixenClient(username="u", password="p", retry_backoff=0,
+                    session_path=tmp_path / "nope.json")
+    assert c._restore_session() is False
+
+
+def test_no_session_path_means_no_persistence(tmp_path):
+    c = GixenClient(username="u", password="p", retry_backoff=0, session_path=None)
+    c._save_session()  # must not crash without a path
+    assert c._restore_session() is False
+
+
+def test_clear_session_removes_file(tmp_path, monkeypatch):
+    c = _client_with_session(tmp_path, monkeypatch)
+    c._save_session()
+    assert (tmp_path / "session.json").exists()
+    c._clear_session()
+    assert not (tmp_path / "session.json").exists()
+    assert not c._logged_in
+
+
+def test_authed_home_uses_stored_session_without_login(tmp_path, monkeypatch):
+    # A client with a restored session but NO login should still work if the
+    # stored cookies are valid (i.e. home looks logged-in).
+    c = GixenClient(username="u", password="p", retry_backoff=0,
+                    session_path=tmp_path / "session.json")
+    # stuff a fake logged-in cookie, then let _restore_session pick it up
+    c._session.cookies.set("PHPSESSID", "abc123", domain="www.gixen.com", path="/")
+    c._save_session()
+    c._logged_in = False
+    monkeypatch.setattr(c, "_home_html", lambda: FAKE_HOME)
+    logins = {"n": 0}
+    monkeypatch.setattr(c, "login", lambda: (logins.__setitem__("n", logins["n"] + 1), FAKE_HOME)[1])
+
+    assert c._authed_home() == FAKE_HOME
+    assert logins["n"] == 0  # session restored+valid: no fresh login needed
+
+
+def test_authed_home_drops_to_login_if_stored_session_expired(tmp_path, monkeypatch):
+    c = GixenClient(username="u", password="p", retry_backoff=0,
+                    session_path=tmp_path / "session.json")
+    c._session.cookies.set("PHPSESSID", "abc123", domain="www.gixen.com", path="/")
+    c._save_session()
+    c._logged_in = False
+    monkeypatch.setattr(c, "_home_html", lambda: "")  # not a logged-in page
+    logins = {"n": 0}
+
+    def fake_login():
+        logins["n"] += 1
+        c._logged_in = True
+        return FAKE_HOME
+
+    monkeypatch.setattr(c, "login", fake_login)
+    assert c._authed_home() == FAKE_HOME
+    assert logins["n"] == 1
+
+
+def test_session_id_parsed_from_html():
+    c = GixenClient(session_path=None)
+    c._session_id('<form action="home_2.php?sessionid=424242" method="post"></form>')
+    assert c._session_id_cache == "424242"

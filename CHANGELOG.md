@@ -2,6 +2,42 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-09-06
+
+### Added
+- **Persistent session**: the login session (Gixen cookies + `sessionid`) is
+  saved to `~/.config/gixenpy/session.json` (overridable with `session_path=`
+  or `GIXEN_SESSION_PATH`) and restored on the next `GixenClient`. Since
+  Gixen allows only one session per account, reusing the stored session
+  avoids kicking your browser out, and each action skips the login
+  round-trip (measured live: ~4.55s → ~2.79s median per list). Pass
+  `session_path=None` to disable. The file never stores the password.
+  Note: Gixen has no JSON API; the gain here is entirely from skipping the
+  login, not from a "faster API".
+- `get_settings()` / `update_settings()`: read and change the account
+  preferences from Gixen's `settings.php` (country, eBay site, bid offsets,
+  number of groups, notifications, contingency, multiwin + group sizes, ...).
+- `get_history(keyword="")`: search the ended-snipes history
+  (`history.php`), returning typed `HistoryEntry` rows (item, title, bid,
+  final price, status, timestamps). The search is by title, as Gixen does.
+- `import_csv(path)`: import snipes from a CSV via `upload.php`.
+- `import_watchlist()` / `import_gixenlist()`: import eBay's Watchlist /
+  the Gixen list as snipes (home-panel buttons).
+- `refresh_prices()`: refresh the current bid on all active snipes.
+- `logout()`: log out server-side and clear the stored session file.
+- CLI: new `history [keyword]`, `settings`, `logout` and `refresh` commands;
+  CLI now persists the session by default.
+- `docs/ENDPOINTS.md`: the captured Gixen protocol (login flow, the
+  `sessionid` token, every settings form, the history row layout, the panel
+  buttons, 404-verified endpoints). Gixen has no JSON API; this documents
+  the internal form protocol gixenpy uses.
+
+### Changed
+- `_Form` now also captures the `<form name="...">`, which is how Gixen's
+  per-setting forms are told apart.
+- `_parse_history` merges `r1..r9` cells per row instead of using the row
+  wrapper, and strips HTML from each cell's text.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added

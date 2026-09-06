@@ -14,7 +14,7 @@ from pathlib import Path
 import click
 
 from . import __version__
-from .client import GixenClient, GixenError, Snipe
+from .client import DEFAULT_SESSION_FILE, GixenClient, GixenError, HistoryEntry, Settings, Snipe
 
 
 def _load_dotenv(path: str = ".env") -> None:
@@ -44,6 +44,11 @@ def _client_from_env() -> GixenClient:
         username=os.environ.get("GIXEN_USERNAME", ""),
         password=os.environ.get("GIXEN_PASSWORD", ""),
         dry_run=False,
+        # Reuse the stored session (cookies) instead of logging in fresh on
+        # every run: Gixen allows only one session per account, so a fresh
+        # login would keep kicking your browser out. The file only holds the
+        # session cookie, never the password.
+        session_path=os.environ.get("GIXEN_SESSION_PATH", DEFAULT_SESSION_FILE),
     )
 
 
@@ -205,6 +210,68 @@ def group_cmd(group_id: int, items: tuple[str, ...]) -> None:
             failures += 1
     if failures:
         sys.exit(1)
+
+
+@main.command("history")
+@click.argument("keyword", required=False, default="")
+def history_cmd(keyword: str) -> None:
+    """Search the ended-snipes history (optionally filtered by KEYWORD)."""
+    client = _client_from_env()
+    try:
+        entries = client.get_history(keyword)
+    except GixenError as e:
+        _fail(str(e))
+        return
+    if not entries:
+        click.echo("  (no history entries)")
+        return
+    for e in entries:
+        click.echo(
+            f"{e.item_id:<14} {e.final_price or e.bid:>10}  {e.status:<24} {e.end_time}  {e.title[:50]}"
+        )
+
+
+@main.command("settings")
+def settings_cmd() -> None:
+    """Show the account's current settings (the Settings page, read directly)."""
+    client = _client_from_env()
+    try:
+        s = client.get_settings()
+    except GixenError as e:
+        _fail(str(e))
+        return
+    for k, v in s.to_dict().items():
+        click.echo(f"{k}: {v}")
+
+
+@main.command("logout")
+def logout_cmd() -> None:
+    """Log out of Gixen (also clears the stored session file)."""
+    client = _client_from_env()
+    try:
+        res = client.logout()
+    except GixenError as e:
+        _fail(str(e))
+        return
+    if res.ok:
+        _ok(res.message)
+    else:
+        _fail(res.message)
+
+
+@main.command("refresh")
+def refresh_cmd() -> None:
+    """Refresh the current bids on all active snipes."""
+    client = _client_from_env()
+    try:
+        res = client.refresh_prices()
+    except GixenError as e:
+        _fail(str(e))
+        return
+    if res.ok:
+        _ok(res.message)
+    else:
+        _fail(res.message)
 
 
 if __name__ == "__main__":
